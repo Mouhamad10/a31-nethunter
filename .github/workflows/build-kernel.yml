@@ -1,0 +1,77 @@
+name: Build A31 NetHunter kernel
+
+# Manual: Actions -> "Build A31 NetHunter kernel" -> Run workflow.
+# Clones the booting 4.14 "Atrocious" tree, merges the NetHunter defconfig fragment,
+# and builds Image.gz with clang. First-attempt scaffold: expect to pin toolchain /
+# fix a few symbols for a fully green build; the logs are the point.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: "4.14 Atrocious kernel source"
+        default: "https://github.com/SN-Abdullah-Al-Noman/SM-A315F"
+      kernel_ref:
+        description: "branch / tag / commit"
+        default: "main"
+      defconfig:
+        description: "base defconfig in arch/arm64/configs"
+        default: "a31_defconfig"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: kit }
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git bc bison flex libssl-dev make gcc libc6-dev \
+            clang lld llvm python3 zip ca-certificates
+          clang --version | head -1
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth 1 -b "${{ github.event.inputs.kernel_ref }}" \
+            "${{ github.event.inputs.kernel_repo }}" kernel || \
+          git clone --depth 1 "${{ github.event.inputs.kernel_repo }}" kernel
+          ls kernel/arch/arm64/configs/ | head
+
+      - name: Merge NetHunter fragment into defconfig
+        working-directory: kernel
+        run: |
+          FRAG=../kit/kernel/a315f_nethunter_defconfig.fragment
+          BASE=arch/arm64/configs/${{ github.event.inputs.defconfig }}
+          test -f "$BASE" || { echo "::error::base defconfig $BASE not found"; ls arch/arm64/configs; exit 1; }
+          # produce a merged a315f_nethunter_defconfig
+          cat "$BASE" "$FRAG" > arch/arm64/configs/a315f_nethunter_defconfig
+          ./scripts/kconfig/merge_config.sh -m -O arch/arm64/configs \
+            "$BASE" "$FRAG" || true
+          echo "merged fragment ($(grep -c '^CONFIG_' "$FRAG") options)"
+
+      - name: Build Image.gz
+        working-directory: kernel
+        continue-on-error: true
+        run: |
+          export ARCH=arm64 SUBARCH=arm64
+          export KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
+          MAKE="make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
+          $MAKE a315f_nethunter_defconfig || $MAKE ${{ github.event.inputs.defconfig }}
+          $MAKE -j$(nproc) Image.gz 2>&1 | tee ../build.log | tail -40
+
+      - name: Collect output
+        run: |
+          mkdir -p out
+          cp kernel/out/arch/arm64/boot/Image.gz out/ 2>/dev/null && echo "Image.gz built" || echo "Image.gz NOT produced - see build.log"
+          cp build.log out/ 2>/dev/null || true
+          cp kernel/out/.config out/kernel.config 2>/dev/null || true
+          ls -lh out/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: a31-nethunter-kernel
+          path: out/*
