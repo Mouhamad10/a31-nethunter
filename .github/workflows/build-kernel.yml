@@ -45,6 +45,16 @@ jobs:
           ls kernel/drivers/net/wireless/realtek 2>&1 || true
           ls kernel/drivers/net/wireless/ralink 2>&1 || true
 
+      - name: Patch sdfat to accept vold's time_offset option (external SD card fix)
+        working-directory: kernel
+        run: |
+          # Modern GSI vold mounts the external microSD with "time_offset=<min>"; this
+          # old Samsung sdfat driver rejects unknown options with -EINVAL, so the card
+          # is marked "unmountable". The patch registers time_offset and ignores it.
+          test -f fs/sdfat/sdfat.c || { echo "::error::fs/sdfat/sdfat.c not found"; exit 1; }
+          python3 ../kit/kernel/patch_sdfat.py fs/sdfat/sdfat.c
+          grep -n 'case Opt_time_offset' fs/sdfat/sdfat.c
+
       - name: Fetch proven toolchain (zyc-clang-14) and satisfy the hardcoded path
         run: |
           git clone --depth=1 https://github.com/karamdev1/zyc-clang-14-20260619.git "$HOME/zyc" || \
