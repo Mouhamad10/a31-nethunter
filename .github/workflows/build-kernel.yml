@@ -1,21 +1,21 @@
-name: Build A31 NetHunter kernel
+name: Build A31 NetHunter kernel (Atrocious base)
 
-# Manual: Actions -> "Build A31 NetHunter kernel" -> Run workflow.
-# Clones the booting 4.14 "Atrocious" tree, merges the NetHunter defconfig fragment,
-# and builds Image.gz with clang. First-attempt scaffold: expect to pin toolchain /
-# fix a few symbols for a fully green build; the logs are the point.
+# Adds the NetHunter feature set to the user's OWN booting kernel (Atrocious 4.14 for A31),
+# so the existing Android-16 GSI (which needs Atrocious's eBPF backport) keeps working.
+# Toolchain: the proven zyc-clang-14, placed at the exact hardcoded clang-r383902 path
+# that the Atrocious Makefile expects.
 
 on:
   workflow_dispatch:
     inputs:
       kernel_repo:
-        description: "4.14 Atrocious kernel source"
+        description: "Atrocious kernel source"
         default: "https://github.com/SN-Abdullah-Al-Noman/SM-A315F"
       kernel_ref:
         description: "branch / tag / commit"
         default: "main"
       defconfig:
-        description: "base defconfig in arch/arm64/configs"
+        description: "base defconfig (fallback if the running config is absent)"
         default: "a31_defconfig"
 
 jobs:
@@ -25,83 +25,61 @@ jobs:
       - uses: actions/checkout@v4
         with: { path: kit }
 
-      - name: Install toolchain
+      - name: Install deps
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git bc bison flex libssl-dev make gcc libc6-dev \
-            clang lld llvm python3 zip ca-certificates \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
-          clang --version | head -1
-          aarch64-linux-gnu-ld --version | head -1
-          # The Atrocious kernel hardcodes clang-r383902 at ../toolchain/...; satisfy that path
-          # with the system LLVM toolchain so the build uses a working compiler.
-          TCBIN="$GITHUB_WORKSPACE/toolchain/clang/host/linux-x86/clang-r383902/bin"
-          mkdir -p "$TCBIN"
-          for t in clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-objcopy \
-                   llvm-objdump llvm-readelf llvm-strip llvm-dis llvm-as llvm-ranlib; do
-            s=$(command -v "$t" 2>/dev/null) && ln -sf "$s" "$TCBIN/$t"
-          done
-          ls "$TCBIN"
+            git bc bison flex libssl-dev libelf-dev make \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            python3 zip xz-utils lz4 cpio kmod zstd ca-certificates lld
 
-      - name: Clone kernel source
+      - name: Clone Atrocious kernel
         run: |
           git clone --depth 1 -b "${{ github.event.inputs.kernel_ref }}" \
-            "${{ github.event.inputs.kernel_repo }}" kernel || \
-          git clone --depth 1 "${{ github.event.inputs.kernel_repo }}" kernel
+            "${{ github.event.inputs.kernel_repo }}" kernel \
+          || git clone --depth 1 "${{ github.event.inputs.kernel_repo }}" kernel
           ls kernel/arch/arm64/configs/ | head
 
-      - name: Merge NetHunter fragment into defconfig
+      - name: Fetch proven toolchain (zyc-clang-14) and satisfy the hardcoded path
+        run: |
+          git clone --depth=1 https://github.com/karamdev1/zyc-clang-14-20260619.git "$HOME/zyc" || \
+          git clone --depth=1 https://github.com/justkaram0/zyc-clang-14-20260619.git "$HOME/zyc"
+          "$HOME/zyc/bin/clang" --version | head -1 || { echo "::error::zyc clang not runnable (LFS?)"; ls -l "$HOME/zyc/bin" | head; exit 1; }
+          # Atrocious hardcodes ../toolchain/clang/host/linux-x86/clang-r383902 ; with O=out make
+          # runs from kernel/out, so cover every base with a FULL clang install (not loose symlinks).
+          for base in "$GITHUB_WORKSPACE/toolchain" "$GITHUB_WORKSPACE/kernel/toolchain" "$GITHUB_WORKSPACE/kernel/out/toolchain"; do
+            d="$base/clang/host/linux-x86"; mkdir -p "$d"; ln -sfn "$HOME/zyc" "$d/clang-r383902"
+          done
+          ls -l "$GITHUB_WORKSPACE/kernel/toolchain/clang/host/linux-x86/clang-r383902/bin/clang"
+
+      - name: Merge NetHunter fragment onto the running config
         working-directory: kernel
         run: |
           FRAG=../kit/kernel/a315f_nethunter_defconfig.fragment
           RUNCFG=../kit/kernel/atrocious_v6_running.config
-          # Prefer the EXACT running kernel config as the base (proven to boot), else the tree defconfig.
-          if [ -f "$RUNCFG" ]; then
-            echo "using the running kernel config as base"
-            cp "$RUNCFG" arch/arm64/configs/a315f_nethunter_defconfig
-            BASE=arch/arm64/configs/a315f_nethunter_defconfig
-          else
-            BASE=arch/arm64/configs/${{ github.event.inputs.defconfig }}
-            test -f "$BASE" || { echo "::error::base defconfig $BASE not found"; ls arch/arm64/configs; exit 1; }
-            cp "$BASE" arch/arm64/configs/a315f_nethunter_defconfig
-          fi
+          if [ -f "$RUNCFG" ]; then cp "$RUNCFG" arch/arm64/configs/a315f_nethunter_defconfig
+          else cp "arch/arm64/configs/${{ github.event.inputs.defconfig }}" arch/arm64/configs/a315f_nethunter_defconfig; fi
           ./scripts/kconfig/merge_config.sh -m -O arch/arm64/configs \
-            arch/arm64/configs/a315f_nethunter_defconfig "$FRAG" || \
-            cat "$FRAG" >> arch/arm64/configs/a315f_nethunter_defconfig
-          echo "merged fragment ($(grep -c '^CONFIG_' "$FRAG") options) onto base"
+            arch/arm64/configs/a315f_nethunter_defconfig "$FRAG" || cat "$FRAG" >> arch/arm64/configs/a315f_nethunter_defconfig
+          echo "fragment merged ($(grep -c '^CONFIG_' "$FRAG") opts)"
 
       - name: Build Image.gz
         working-directory: kernel
-        continue-on-error: true
         run: |
-          export ARCH=arm64 SUBARCH=arm64
-          export KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
-          # The kernel hardcodes a RELATIVE ../toolchain/.../clang-r383902 path; with O=out make
-          # runs from kernel/out, so ../toolchain resolves to kernel/toolchain. Populate every
-          # plausible location with symlinks to the system LLVM so that path is a working clang.
-          for root in "$GITHUB_WORKSPACE/toolchain" "$GITHUB_WORKSPACE/kernel/toolchain" "$GITHUB_WORKSPACE/kernel/out/toolchain"; do
-            b="$root/clang/host/linux-x86/clang-r383902/bin"; mkdir -p "$b"
-            for t in clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-objcopy llvm-objdump \
-                     llvm-readelf llvm-strip llvm-as llvm-dis llvm-ranlib; do
-              s=$(command -v "$t") && ln -sf "$s" "$b/$t"
-            done
-          done
-          ls -l "$GITHUB_WORKSPACE/kernel/toolchain/clang/host/linux-x86/clang-r383902/bin/clang"
-          MAKE="make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
-          $MAKE a315f_nethunter_defconfig || $MAKE ${{ github.event.inputs.defconfig }}
-          $MAKE -j$(nproc) Image.gz 2>&1 | tee ../build.log | tail -40
+          export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
+          export PATH="$HOME/zyc/bin:$PATH"
+          MK="make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld NM=llvm-nm OBJCOPY=llvm-objcopy AR=llvm-ar STRIP=llvm-strip OBJDUMP=llvm-objdump HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld.bfd"
+          $MK a315f_nethunter_defconfig
+          $MK -j"$(nproc)" Image.gz 2>&1 | tee ../build.log | tail -45
 
-      - name: Collect output
+      - name: Collect
         run: |
           mkdir -p out
-          cp kernel/out/arch/arm64/boot/Image.gz out/ 2>/dev/null && echo "Image.gz built" || echo "Image.gz NOT produced - see build.log"
+          cp kernel/out/arch/arm64/boot/Image.gz out/ 2>/dev/null && echo "IMAGE OK: $(ls -lh out/Image.gz | awk '{print $5}')" || echo "Image.gz NOT produced"
           cp build.log out/ 2>/dev/null || true
           cp kernel/out/.config out/kernel.config 2>/dev/null || true
-          ls -lh out/
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: a31-nethunter-kernel
           path: out/*
