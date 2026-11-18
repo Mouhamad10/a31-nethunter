@@ -68,7 +68,9 @@ jobs:
         run: |
           export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
           export PATH="$HOME/zyc/bin:$PATH"
-          MK="make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld NM=llvm-nm OBJCOPY=llvm-objcopy AR=llvm-ar STRIP=llvm-strip OBJDUMP=llvm-objdump HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld.bfd"
+          # Match the proven karam build: CC=clang + GNU CROSS_COMPILE binutils (as/ld),
+          # NO llvm-* tool overrides (those made clang pick a wrong assembler -> '-EL' error).
+          MK="make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang HOSTCC=gcc HOSTCXX=g++"
           $MK a315f_nethunter_defconfig
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
