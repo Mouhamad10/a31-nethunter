@@ -68,19 +68,20 @@ jobs:
         run: |
           export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
           export PATH="$HOME/zyc/bin:$PATH"
-          # Match the proven karam build: CC=clang + GNU CROSS_COMPILE binutils (as/ld),
-          # NO llvm-* tool overrides (those made clang pick a wrong assembler -> '-EL' error).
-          MK="make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang HOSTCC=gcc HOSTCXX=g++"
-          # Atrocious forces the external GNU assembler (-no-integrated-as); zyc's 'as' is LLVM-based
-          # and rejects GNU '-EL'. Strip it so clang uses its own integrated assembler for the target.
-          grep -rlZ 'no-integrated-as' Makefile arch/arm64 scripts 2>/dev/null | xargs -0 -r sed -i 's/-no-integrated-as//g' || true
-          $MK a315f_nethunter_defconfig
+          # Give clang a REAL GNU aarch64 assembler/linker for the TARGET only (via -B): zyc's bare
+          # 'as' is LLVM-based (rejects GNU '-EL'); the integrated assembler chokes on the 4.14 VDSO
+          # macros. GNU aarch64 'as' handles both. Host tools keep the system x86 as (HOSTCC=gcc).
+          mkdir -p "$HOME/crosbin"
+          ln -sf "$(command -v aarch64-linux-gnu-as)" "$HOME/crosbin/as"
+          ln -sf "$(command -v aarch64-linux-gnu-ld)" "$HOME/crosbin/ld"
+          MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" HOSTCC=gcc HOSTCXX=g++)
+          "${MK[@]}" a315f_nethunter_defconfig
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
           ./scripts/config --file out/.config -d CC_STACKPROTECTOR_STRONG -d CC_STACKPROTECTOR_REGULAR -e CC_STACKPROTECTOR_NONE 2>/dev/null || true
           sed -i 's/^CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/' out/.config 2>/dev/null || true
-          $MK olddefconfig
-          $MK -j"$(nproc)" Image.gz 2>&1 | tee ../build.log | tail -45
+          "${MK[@]}" olddefconfig
+          "${MK[@]}" -j"$(nproc)" Image.gz 2>&1 | tee ../build.log | tail -45
 
       - name: Collect
         run: |
