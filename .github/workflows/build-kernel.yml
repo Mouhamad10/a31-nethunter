@@ -74,7 +74,9 @@ jobs:
           mkdir -p "$HOME/crosbin"
           ln -sf "$(command -v aarch64-linux-gnu-as)" "$HOME/crosbin/as"
           ln -sf "$(command -v aarch64-linux-gnu-ld)" "$HOME/crosbin/ld"
-          MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" HOSTCC=gcc HOSTCXX=g++)
+          # clang-14 is stricter than the clang-11 Atrocious used; its new warnings + the kernel's
+          # -Werror abort the build. -w (what the proven karam build uses) silences warnings.
+          MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" KCFLAGS=-w KCPPFLAGS=-w HOSTCC=gcc HOSTCXX=g++)
           "${MK[@]}" a315f_nethunter_defconfig
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
