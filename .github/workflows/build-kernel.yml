@@ -71,6 +71,9 @@ jobs:
           # Match the proven karam build: CC=clang + GNU CROSS_COMPILE binutils (as/ld),
           # NO llvm-* tool overrides (those made clang pick a wrong assembler -> '-EL' error).
           MK="make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang HOSTCC=gcc HOSTCXX=g++"
+          # Atrocious forces the external GNU assembler (-no-integrated-as); zyc's 'as' is LLVM-based
+          # and rejects GNU '-EL'. Strip it so clang uses its own integrated assembler for the target.
+          grep -rlZ 'no-integrated-as' Makefile arch/arm64 scripts 2>/dev/null | xargs -0 -r sed -i 's/-no-integrated-as//g' || true
           $MK a315f_nethunter_defconfig
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
