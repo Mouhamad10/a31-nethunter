@@ -30,8 +30,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git bc bison flex libssl-dev make gcc libc6-dev \
-            clang lld llvm python3 zip ca-certificates
+            clang lld llvm python3 zip ca-certificates \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
           clang --version | head -1
+          aarch64-linux-gnu-ld --version | head -1
+          # The Atrocious kernel hardcodes clang-r383902 at ../toolchain/...; satisfy that path
+          # with the system LLVM toolchain so the build uses a working compiler.
+          TCBIN="$GITHUB_WORKSPACE/toolchain/clang/host/linux-x86/clang-r383902/bin"
+          mkdir -p "$TCBIN"
+          for t in clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-objcopy \
+                   llvm-objdump llvm-readelf llvm-strip llvm-dis llvm-as llvm-ranlib; do
+            s=$(command -v "$t" 2>/dev/null) && ln -sf "$s" "$TCBIN/$t"
+          done
+          ls "$TCBIN"
 
       - name: Clone kernel source
         run: |
@@ -44,13 +55,21 @@ jobs:
         working-directory: kernel
         run: |
           FRAG=../kit/kernel/a315f_nethunter_defconfig.fragment
-          BASE=arch/arm64/configs/${{ github.event.inputs.defconfig }}
-          test -f "$BASE" || { echo "::error::base defconfig $BASE not found"; ls arch/arm64/configs; exit 1; }
-          # produce a merged a315f_nethunter_defconfig
-          cat "$BASE" "$FRAG" > arch/arm64/configs/a315f_nethunter_defconfig
+          RUNCFG=../kit/kernel/atrocious_v6_running.config
+          # Prefer the EXACT running kernel config as the base (proven to boot), else the tree defconfig.
+          if [ -f "$RUNCFG" ]; then
+            echo "using the running kernel config as base"
+            cp "$RUNCFG" arch/arm64/configs/a315f_nethunter_defconfig
+            BASE=arch/arm64/configs/a315f_nethunter_defconfig
+          else
+            BASE=arch/arm64/configs/${{ github.event.inputs.defconfig }}
+            test -f "$BASE" || { echo "::error::base defconfig $BASE not found"; ls arch/arm64/configs; exit 1; }
+            cp "$BASE" arch/arm64/configs/a315f_nethunter_defconfig
+          fi
           ./scripts/kconfig/merge_config.sh -m -O arch/arm64/configs \
-            "$BASE" "$FRAG" || true
-          echo "merged fragment ($(grep -c '^CONFIG_' "$FRAG") options)"
+            arch/arm64/configs/a315f_nethunter_defconfig "$FRAG" || \
+            cat "$FRAG" >> arch/arm64/configs/a315f_nethunter_defconfig
+          echo "merged fragment ($(grep -c '^CONFIG_' "$FRAG") options) onto base"
 
       - name: Build Image.gz
         working-directory: kernel
