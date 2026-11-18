@@ -39,6 +39,11 @@ jobs:
             "${{ github.event.inputs.kernel_repo }}" kernel \
           || git clone --depth 1 "${{ github.event.inputs.kernel_repo }}" kernel
           ls kernel/arch/arm64/configs/ | head
+          echo "=== wifi driver sources present in tree? ==="
+          ls -d kernel/net/mac80211 kernel/net/wireless 2>&1 || true
+          ls -d kernel/drivers/net/wireless/realtek/rtl818x/rtl8187 2>&1 || true
+          ls kernel/drivers/net/wireless/realtek 2>&1 || true
+          ls kernel/drivers/net/wireless/ralink 2>&1 || true
 
       - name: Fetch proven toolchain (zyc-clang-14) and satisfy the hardcoded path
         run: |
@@ -52,16 +57,20 @@ jobs:
           done
           ls -l "$GITHUB_WORKSPACE/kernel/toolchain/clang/host/linux-x86/clang-r383902/bin/clang"
 
-      - name: Merge NetHunter fragment onto the running config
+      - name: Seed base defconfig from the running config
         working-directory: kernel
         run: |
           FRAG=../kit/kernel/a315f_nethunter_defconfig.fragment
           RUNCFG=../kit/kernel/atrocious_v6_running.config
           if [ -f "$RUNCFG" ]; then cp "$RUNCFG" arch/arm64/configs/a315f_nethunter_defconfig
           else cp "arch/arm64/configs/${{ github.event.inputs.defconfig }}" arch/arm64/configs/a315f_nethunter_defconfig; fi
-          ./scripts/kconfig/merge_config.sh -m -O arch/arm64/configs \
-            arch/arm64/configs/a315f_nethunter_defconfig "$FRAG" || cat "$FRAG" >> arch/arm64/configs/a315f_nethunter_defconfig
-          echo "fragment merged ($(grep -c '^CONFIG_' "$FRAG") opts)"
+          # Append the NetHunter fragment DIRECTLY to the defconfig the build will read.
+          # (The old merge_config.sh -m -O step wrote a .config that `make <name>_defconfig`
+          #  never reads, so the fragment was silently dropped — that is why MAC80211/RTL8187
+          #  were missing from the previously-built kernel.)
+          printf '\n# ===== NetHunter fragment (appended) =====\n' >> arch/arm64/configs/a315f_nethunter_defconfig
+          cat "$FRAG" >> arch/arm64/configs/a315f_nethunter_defconfig
+          echo "appended fragment ($(grep -c '^CONFIG_' "$FRAG") opts) to defconfig"
 
       - name: Build Image.gz
         working-directory: kernel
@@ -84,7 +93,33 @@ jobs:
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
           ./scripts/config --file out/.config -d CC_STACKPROTECTOR_STRONG -d CC_STACKPROTECTOR_REGULAR -e CC_STACKPROTECTOR_NONE 2>/dev/null || true
           sed -i 's/^CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/' out/.config 2>/dev/null || true
+          # DETERMINISTIC guarantee: force-enable the wifi stack directly on the generated .config,
+          # independent of defconfig line-ordering. olddefconfig then pulls in dependencies.
+          ./scripts/config --file out/.config \
+            -e WLAN -e CFG80211 -e CFG80211_WEXT -e MAC80211 -e MAC80211_MESH -e PACKET \
+            -e WIRELESS_EXT -e WEXT_CORE -e WEXT_PRIV -e WEXT_PROC \
+            -e WLAN_VENDOR_REALTEK -e RTL8187 -e EEPROM_93CX6 -e RTL8192CU -e RTL8XXXU -e RTL8XXXU_UNTESTED \
+            -e WLAN_VENDOR_ATH -e ATH9K -e ATH9K_HTC -e CARL9170 \
+            -e WLAN_VENDOR_RALINK -e RT2X00 -e RT2800USB \
+            -e WLAN_VENDOR_MEDIATEK -e MT7601U -e WLAN_VENDOR_ZYDAS -e ZD1211RW \
+            -e BT -e BT_HCIBTUSB -e USB_HID -e HIDRAW 2>/dev/null || true
           "${MK[@]}" olddefconfig
+          # ---- ASSERT the wifi stack actually made it into the final config ----
+          echo "=== WIFI/80211 in FINAL out/.config ==="
+          grep -E 'CONFIG_(MAC80211|CFG80211_WEXT|RTL8187|RTL8XXXU|RT2800USB|ATH9K_HTC|MT7601U|ZD1211RW|WLAN)=' out/.config | sort || true
+          miss=""
+          for s in CONFIG_MAC80211=y CONFIG_RTL8187=y CONFIG_CFG80211_WEXT=y; do
+            grep -qx "$s" out/.config || miss="$miss $s"
+          done
+          if [ -n "$miss" ]; then
+            echo "::error::NetHunter wifi stack MISSING from final config:$miss"
+            echo "--- diagnostics: is the driver source even in the tree? ---"
+            ls net/mac80211/Kconfig 2>&1
+            ls -d drivers/net/wireless/realtek/rtl818x/rtl8187 2>&1
+            grep -n 'MAC80211\|RTL8187' net/mac80211/Kconfig drivers/net/wireless/realtek/rtl818x/Kconfig 2>&1 | head
+            exit 1
+          fi
+          echo ">>> wifi stack present (MAC80211 + RTL8187 + CFG80211_WEXT) — building kernel <<<"
           "${MK[@]}" -j"$(nproc)" Image.gz 2>&1 | tee ../build.log | tail -45
 
       - name: Collect
