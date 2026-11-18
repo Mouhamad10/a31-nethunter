@@ -76,7 +76,9 @@ jobs:
           ln -sf "$(command -v aarch64-linux-gnu-ld)" "$HOME/crosbin/ld"
           # clang-14 is stricter than the clang-11 Atrocious used; its new warnings + the kernel's
           # -Werror abort the build. -w (what the proven karam build uses) silences warnings.
-          MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" KCFLAGS=-w KCPPFLAGS=-w HOSTCC=gcc HOSTCXX=g++)
+          # -fno-builtin-stpcpy: clang-14 rewrites some strcpy() into stpcpy(), which the 4.14 kernel
+          # does not provide -> "undefined reference to stpcpy" at the vmlinux link. This stops that.
+          MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" "KCFLAGS=-w -fno-builtin-stpcpy" KCPPFLAGS=-w HOSTCC=gcc HOSTCXX=g++)
           "${MK[@]}" a315f_nethunter_defconfig
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
