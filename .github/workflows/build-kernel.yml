@@ -77,6 +77,17 @@ jobs:
         run: |
           export ARCH=arm64 SUBARCH=arm64
           export KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
+          # The kernel hardcodes a RELATIVE ../toolchain/.../clang-r383902 path; with O=out make
+          # runs from kernel/out, so ../toolchain resolves to kernel/toolchain. Populate every
+          # plausible location with symlinks to the system LLVM so that path is a working clang.
+          for root in "$GITHUB_WORKSPACE/toolchain" "$GITHUB_WORKSPACE/kernel/toolchain" "$GITHUB_WORKSPACE/kernel/out/toolchain"; do
+            b="$root/clang/host/linux-x86/clang-r383902/bin"; mkdir -p "$b"
+            for t in clang clang++ clang-cpp ld.lld lld llvm-ar llvm-nm llvm-objcopy llvm-objdump \
+                     llvm-readelf llvm-strip llvm-as llvm-dis llvm-ranlib; do
+              s=$(command -v "$t") && ln -sf "$s" "$b/$t"
+            done
+          done
+          ls -l "$GITHUB_WORKSPACE/kernel/toolchain/clang/host/linux-x86/clang-r383902/bin/clang"
           MAKE="make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           $MAKE a315f_nethunter_defconfig || $MAKE ${{ github.event.inputs.defconfig }}
           $MAKE -j$(nproc) Image.gz 2>&1 | tee ../build.log | tail -40
