@@ -55,6 +55,19 @@ jobs:
           python3 ../kit/kernel/patch_sdfat.py fs/sdfat/sdfat.c
           grep -n 'case Opt_time_offset' fs/sdfat/sdfat.c
 
+      - name: Integrate RTL8822BU (88x2bu) driver in-tree (TP-Link Archer T4U 2357:0115)
+        working-directory: kernel
+        run: |
+          # RTL8822BU is NOT in the 4.14 tree. Pull morrownr/88x2bu (has the 2357:0115 id)
+          # and wire it as an in-kernel driver so CONFIG_RTL8822BU=y builds it into the image.
+          git clone --depth 1 https://github.com/morrownr/88x2bu-20210702.git /tmp/r8822 2>&1 | tail -2
+          D=drivers/net/wireless/realtek/rtl8822bu
+          rm -rf "$D"; mkdir -p "$D"; cp -a /tmp/r8822/. "$D"/; rm -rf "$D/.git"
+          grep -q 'rtl8822bu/' drivers/net/wireless/realtek/Makefile || echo 'obj-$(CONFIG_RTL8822BU) += rtl8822bu/' >> drivers/net/wireless/realtek/Makefile
+          grep -q 'rtl8822bu/Kconfig' drivers/net/wireless/realtek/Kconfig || printf '\nsource "drivers/net/wireless/realtek/rtl8822bu/Kconfig"\n' >> drivers/net/wireless/realtek/Kconfig
+          echo "wired. $(grep -m1 'config ' $D/Kconfig)"
+          grep -n '0x2357, 0x0115' "$D"/os_dep/linux/usb_intf.c | head -1 || echo "::warning::device id 2357:0115 not found in driver"
+
       - name: Fetch proven toolchain (zyc-clang-14) and satisfy the hardcoded path
         run: |
           git clone --depth=1 https://github.com/karamdev1/zyc-clang-14-20260619.git "$HOME/zyc" || \
@@ -108,7 +121,7 @@ jobs:
           ./scripts/config --file out/.config \
             -e WLAN -e CFG80211 -e CFG80211_WEXT -e MAC80211 -e MAC80211_MESH -e PACKET \
             -e WIRELESS_EXT -e WEXT_CORE -e WEXT_PRIV -e WEXT_PROC \
-            -e WLAN_VENDOR_REALTEK -e RTL8187 -e EEPROM_93CX6 -e RTL8192CU -e RTL8XXXU -e RTL8XXXU_UNTESTED \
+            -e WLAN_VENDOR_REALTEK -e RTL8187 -e EEPROM_93CX6 -e RTL8192CU -e RTL8XXXU -e RTL8XXXU_UNTESTED -e RTL8822BU \
             -e WLAN_VENDOR_ATH -e ATH9K -e ATH9K_HTC -e CARL9170 \
             -e WLAN_VENDOR_RALINK -e RT2X00 -e RT2800USB \
             -e WLAN_VENDOR_MEDIATEK -e MT7601U -e WLAN_VENDOR_ZYDAS -e ZD1211RW \
@@ -116,9 +129,9 @@ jobs:
           "${MK[@]}" olddefconfig
           # ---- ASSERT the wifi stack actually made it into the final config ----
           echo "=== WIFI/80211 in FINAL out/.config ==="
-          grep -E 'CONFIG_(MAC80211|CFG80211_WEXT|RTL8187|RTL8XXXU|RT2800USB|ATH9K_HTC|MT7601U|ZD1211RW|WLAN)=' out/.config | sort || true
+          grep -E 'CONFIG_(MAC80211|CFG80211_WEXT|RTL8187|RTL8XXXU|RTL8822BU|RT2800USB|ATH9K_HTC|MT7601U|ZD1211RW|WLAN)=' out/.config | sort || true
           miss=""
-          for s in CONFIG_MAC80211=y CONFIG_RTL8187=y CONFIG_CFG80211_WEXT=y; do
+          for s in CONFIG_MAC80211=y CONFIG_RTL8187=y CONFIG_CFG80211_WEXT=y CONFIG_RTL8822BU=y; do
             grep -qx "$s" out/.config || miss="$miss $s"
           done
           if [ -n "$miss" ]; then
