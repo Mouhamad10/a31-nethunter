@@ -191,6 +191,22 @@ su -c 'ip link set wlan1 down; /data/local/tmp/setmon_nl wlan1 monitor; ip link 
 Verify: `cat /sys/class/net/wlan1/type` → `803` (radiotap monitor). Return to normal with the
 `managed` argument.
 
+**Using the cards with `airmon-ng` / `aircrack-ng` / `wifite`:** the kernel and drivers are fine, but
+stock `airmon-ng` has a bug that makes it (and `wifite`, which calls it) **crash on a non-TTY stdin**.
+It loops `Invalid input. Yes, or no? [y/n]` and dies with *"Maximum function recursion depth (1000)
+reached"*, so `wifite` reports *"airmon-ng did not find any wireless interfaces."* Cause: `airmon-ng`'s
+`yesorno()` runs `read -r input`; on EOF `$input` is empty, it hits the `*)` case and recurses forever.
+It is triggered by `handleLostPhys()` because the internal `wlan0`/`phy0` shows *"no interfaces
+assigned"* inside the chroot. Patch it once (idempotent, keeps a `.orig` backup):
+```
+# run as root; arg = the NetHunter chroot root (default shown)
+su -c 'sh tools/fix-airmon-ng.sh /data/local/nhsystem/kali-arm64'
+```
+After patching, `airmon-ng` auto-skips `phy0` (*"PHY phy0 will remain lost."*) and correctly lists and
+starts monitor on **both** cards — confirmed: `airmon-ng start wlan1` (RTL8187) and `airmon-ng start
+wlan2` (RTL8822BU) both enter monitor, and `airodump-ng` captured 18 / 25 APs respectively. (The
+`setmon` / `setmon_nl` helpers above remain a driver-level fallback that does not need `airmon-ng`.)
+
 **Host-mode / power:** plug the adapter through a **powered USB-OTG hub** (external power bank). The
 phone enters USB host mode automatically; `wlan1` + a new `phyN` appear once the driver binds.
 
@@ -211,6 +227,7 @@ kernel/
 tools/
   setmon.c                            # set monitor via WEXT (RTL8187)
   setmon_nl.c                         # set monitor via nl80211 (RTL8822BU)
+  fix-airmon-ng.sh                    # patch airmon-ng's non-TTY recursion crash (wifite "no interfaces")
 ```
 
 ---
@@ -220,6 +237,8 @@ tools/
 - **Kali chroot:** install the NetHunter app + a light `kalifs-arm64-nano` (~150 MB) rootfs to get
   `airmon-ng` / `airodump-ng` / `aireplay-ng` / `aircrack-ng` for real capture, injection and
   WPA-handshake work. Tip: download the rootfs on a PC and `adb push` it (slow mobile data).
+  Once installed, run `tools/fix-airmon-ng.sh` so `airmon-ng` / `wifite` actually enumerate the
+  cards instead of crashing on the phantom-`phy0` prompt (see §8).
 - **More adapters:** the in-tree drivers already cover many chips; for strong 5 GHz monitor an
   `mt7612u` / `rtl8812au` is also an option.
 - **Rebuild on a newer Atrocious commit:** keep the fragment + patches; re-run the workflow.
