@@ -67,6 +67,10 @@ jobs:
           grep -q 'rtl8822bu/Kconfig' drivers/net/wireless/realtek/Kconfig || printf '\nsource "drivers/net/wireless/realtek/rtl8822bu/Kconfig"\n' >> drivers/net/wireless/realtek/Kconfig
           echo "wired. $(grep -m1 'config ' $D/Kconfig)"
           grep -n '0x2357, 0x0115' "$D"/os_dep/linux/usb_intf.c | head -1 || echo "::warning::device id 2357:0115 not found in driver"
+          # --- 4.14 source-compat patches for the driver ---
+          # kernel 4.14 declares console_suspend_enabled as bool; driver redeclares it int.
+          sed -i 's/extern[[:space:]]\+int[[:space:]]\+console_suspend_enabled;/extern bool console_suspend_enabled;/' "$D"/os_dep/linux/usb_intf.c
+          grep -n 'console_suspend_enabled' "$D"/os_dep/linux/usb_intf.c | head -3
 
       - name: Fetch proven toolchain (zyc-clang-14) and satisfy the hardcoded path
         run: |
@@ -144,6 +148,8 @@ jobs:
           fi
           echo ">>> wifi stack present (MAC80211 + RTL8187 + CFG80211_WEXT) — building kernel <<<"
           "${MK[@]}" -j"$(nproc)" Image.gz 2>&1 | tee ../build.log | tail -45
+          # the pipe above hides make's exit code — fail explicitly if the image was not produced
+          test -s out/arch/arm64/boot/Image.gz || { echo "::error::Image.gz was NOT built (compile failed — see build.log)"; exit 1; }
 
       - name: Collect
         run: |
