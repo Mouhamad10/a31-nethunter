@@ -102,7 +102,7 @@ jobs:
       - name: Build Image.gz
         working-directory: kernel
         run: |
-          export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=Mouhamad10 KBUILD_BUILD_HOST=github
+          export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=MLxMM KBUILD_BUILD_HOST=MLxMM
           export PATH="$HOME/zyc/bin:$PATH"
           # Give clang a REAL GNU aarch64 assembler/linker for the TARGET only (via -B): zyc's bare
           # 'as' is LLVM-based (rejects GNU '-EL'); the integrated assembler chokes on the 4.14 VDSO
@@ -115,7 +115,10 @@ jobs:
           # -fno-builtin-stpcpy: clang-14 rewrites some strcpy() into stpcpy(), which the 4.14 kernel
           # does not provide -> "undefined reference to stpcpy" at the vmlinux link. This stops that.
           MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" "KCFLAGS=-w -fno-builtin-stpcpy" KCPPFLAGS=-w HOSTCC=gcc HOSTCXX=g++)
+          # Identity branding: kernel release reads 4.14.357-OpenOla, built by MLxMM@MLxMM
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 357/' Makefile
           "${MK[@]}" a315f_nethunter_defconfig
+          ./scripts/config --file out/.config --set-str LOCALVERSION "-OpenOla" -d LOCALVERSION_AUTO
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
           # drop the strong stack protector so the compiler-check passes (fine for a test kernel).
           ./scripts/config --file out/.config -d CC_STACKPROTECTOR_STRONG -d CC_STACKPROTECTOR_REGULAR -e CC_STACKPROTECTOR_NONE 2>/dev/null || true
@@ -131,6 +134,7 @@ jobs:
             -e WLAN_VENDOR_MEDIATEK -e MT7601U -e WLAN_VENDOR_ZYDAS -e ZD1211RW \
             -e BT -e BT_HCIBTUSB -e USB_HID -e HIDRAW 2>/dev/null || true
           "${MK[@]}" olddefconfig
+          grep -E '^CONFIG_LOCALVERSION=' out/.config
           # ---- ASSERT the wifi stack actually made it into the final config ----
           echo "=== WIFI/80211 in FINAL out/.config ==="
           grep -E 'CONFIG_(MAC80211|CFG80211_WEXT|RTL8187|RTL8XXXU|RTL8822BU|RT2800USB|ATH9K_HTC|MT7601U|ZD1211RW|WLAN)=' out/.config | sort || true
