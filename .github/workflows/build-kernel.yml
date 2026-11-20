@@ -116,7 +116,10 @@ jobs:
           # does not provide -> "undefined reference to stpcpy" at the vmlinux link. This stops that.
           MK=(make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- "CC=clang -B$HOME/crosbin" "KCFLAGS=-w -fno-builtin-stpcpy" KCPPFLAGS=-w HOSTCC=gcc HOSTCXX=g++)
           # Identity branding: kernel release reads 4.14.357-OpenOla, built by MLxMM@MLxMM
-          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 357/' Makefile
+          grep -n '^KERNELVERSION' Makefile
+          # only the DISPLAYED release; real LINUX_VERSION_CODE stays 4.14.186 so driver version checks are unchanged
+          sed -i 's/^KERNELVERSION = .*/KERNELVERSION = 4.14.357$(EXTRAVERSION)/' Makefile
+          grep -n '^KERNELVERSION' Makefile
           "${MK[@]}" a315f_nethunter_defconfig
           ./scripts/config --file out/.config --set-str LOCALVERSION "-OpenOla" -d LOCALVERSION_AUTO
           # clang-14 trips the 4.14 -fstack-protector-strong probe (Atrocious used clang-11/r383902);
@@ -153,7 +156,7 @@ jobs:
           echo ">>> wifi stack present (MAC80211 + RTL8187 + CFG80211_WEXT) — building kernel <<<"
           "${MK[@]}" -j"$(nproc)" Image.gz 2>&1 | tee ../build.log | tail -45
           # the pipe above hides make's exit code — fail explicitly if the image was not produced
-          test -s out/arch/arm64/boot/Image.gz || { echo "::error::Image.gz was NOT built (compile failed — see build.log)"; exit 1; }
+          test -s out/arch/arm64/boot/Image.gz || { grep -n -E 'error:|Error [0-9]|undefined reference' ../build.log | head -30; echo "::error::Image.gz was NOT built (compile failed — see build.log)"; exit 1; }
 
       - name: Collect
         run: |
